@@ -1,0 +1,11 @@
+# Credenciales y archivos locales
+.env
+*.log
+
+# Test (no se necesita en producción)
+includes/test-crear-orden.php
+
+# IDE
+.idea/
+.vscode/
+*.swp
