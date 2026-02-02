@@ -42,13 +42,27 @@ add_action('admin_enqueue_scripts', function($hook) {
 // AJAX: API Connection Test
 add_action('wp_ajax_ub_test_api_connection', 'ub_ajax_test_handler');
 function ub_ajax_test_handler() {
+    // 1. Verificación de seguridad
     check_ajax_referer('ub_test_api_nonce', 'ub_test_api_nonce');
+
     $api = new Uber_API();
-    $token = $api->get_access_token_test(sanitize_text_field($_POST['client_id']), $_POST['client_secret']);
+    
+    // 2. Obtenemos el token usando los datos que vienen del formulario
+    $client_id     = sanitize_text_field($_POST['client_id']);
+    $client_secret = $_POST['client_secret']; // Sin sanitizar para no romper caracteres especiales
+    
+    $token = $api->get_access_token_test($client_id, $client_secret);
+
+    // 3. Enviamos la respuesta estructurada para que el JS NO de error "Done"
     if (!is_wp_error($token)) {
-        wp_send_json_success(['message' => 'Connection successful! Token generated.']);
+        wp_send_json_success([
+            'message' => 'Connection successful! Token generated.',
+            'token'   => $token // Opcional, para debug
+        ]);
     } else {
-        wp_send_json_error(['message' => 'Authentication failed: ' . $token->get_error_message()]);
+        wp_send_json_error([
+            'message' => 'Authentication failed: ' . $token->get_error_message()
+        ]);
     }
 }
 
@@ -115,57 +129,24 @@ function ub_render_uber_box($post) {
 }
 
 // 6. MAIN FUNCTION: TRIGGER DELIVERY (DYNAMIC DATA)
-add_action('woocommerce_order_status_processing', 'ub_disparar_entrega_uber', 10, 1);
+// Se dispara cuando el pago es aceptado (estado Processing)
+add_action('woocommerce_order_status_processing', 'ub_check_and_dispatch_uber', 10, 1);
 
-function ub_disparar_entrega_uber($order_id) {
+function ub_check_and_dispatch_uber($order_id) {
     $order = wc_get_order($order_id);
-    if (get_post_meta($order_id, '_uber_delivery_id', true)) return true;
-
-    $api = new Uber_API();
-    $db  = new Uber_Database();
-    $settings = $db->get_credentials();
-
-    // --- PICKUP DATA (DYNAMIC FROM WOOCOMMERCE SETTINGS) ---
-    $store_address  = get_option('woocommerce_store_address');
-    $store_city     = get_option('woocommerce_store_city');
-    $store_postcode = get_option('woocommerce_store_postcode');
-    $store_state    = get_option('woocommerce_store_state');
     
-    $pickup_address = "$store_address, $store_city, $store_state $store_postcode";
-    $pickup_phone   = !empty($settings['store_phone']) ? $settings['store_phone'] : '+13055551234';
+    // 1. VALIDACIÓN: ¿El cliente eligió Uber como envío?
+    $shipping_methods = $order->get_shipping_methods();
+    $shipping_method = reset($shipping_methods);
+    $method_id = $shipping_method ? $shipping_method->get_method_id() : '';
 
-    // --- CUSTOMER DATA ---
-    $customer_phone = preg_replace('/[^0-9]/', '', $order->get_shipping_phone() ?: $order->get_billing_phone());
-    $customer_phone = (strlen($customer_phone) == 10) ? '+1' . $customer_phone : '+' . $customer_phone;
-
-    $delivery_data = [
-        'pickup_name'          => get_bloginfo('name'),
-        'pickup_address'       => $pickup_address,
-        'pickup_phone_number'  => $pickup_phone,
-        'dropoff_name'         => $order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name(),
-        'dropoff_address'      => $order->get_shipping_address_1() . ', ' . $order->get_shipping_city() . ', ' . $order->get_shipping_state() . ' ' . $order->get_shipping_postcode(),
-        'dropoff_phone_number' => $customer_phone,
-        'manifest_items'       => []
-    ];
-
-    foreach ($order->get_items() as $item) {
-        $delivery_data['manifest_items'][] = [
-            'name'     => $item->get_name(),
-            'quantity' => $item->get_quantity(),
-        ];
+    // Solo continuamos si el ID del método contiene la palabra 'uber'
+    if (strpos($method_id, 'uber') !== false) {
+        return ub_disparar_entrega_uber($order_id);
     }
-
-    $result = $api->create_delivery($delivery_data);
-
-    if (!is_wp_error($result) && isset($result['id'])) {
-        update_post_meta($order_id, '_uber_delivery_id', $result['id']);
-        $order->add_order_note('UBER DIRECT: Success! Order created with ID: ' . $result['id']);
-        return true;
-    } else {
-        $error = is_wp_error($result) ? $result->get_error_message() : 'Unknown response error';
-        $order->add_order_note('UBER DIRECT FAILED: ' . $error);
-        return $error;
-    }
+    
+    // Si no fue Uber, no hacemos nada
+    return;
 }
 // AJAX: Save Settings (ESTO ES LO QUE TE FALTABA)
 add_action('wp_ajax_ub_save_settings', 'ub_ajax_save_settings_handler');
@@ -185,5 +166,53 @@ function ub_ajax_save_settings_handler() {
         wp_send_json_success(['message' => 'Settings saved successfully!']);
     } else {
         wp_send_json_error(['message' => 'Failed to save settings.']);
+    }
+}
+
+// 7. LA FUNCIÓN QUE REALMENTE ENVÍA A UBER (Esta es la que te faltaba)
+function ub_disparar_entrega_uber($order_id) {
+    $order = wc_get_order($order_id);
+    if (get_post_meta($order_id, '_uber_delivery_id', true)) return true;
+
+    $api = new Uber_API();
+    $db  = new Uber_Database();
+    $settings = $db->get_credentials();
+
+    // Pickup Data
+    $pickup_address = !empty($settings['pickup_address']) ? stripslashes($settings['pickup_address']) : get_option('woocommerce_store_address');
+    $pickup_phone = !empty($settings['pickup_phone']) ? $settings['pickup_phone'] : '+13055551234';
+    $pickup_name = !empty($settings['pickup_name']) ? $settings['pickup_name'] : get_bloginfo('name');
+
+    // Customer Phone Formatting
+    $customer_phone = preg_replace('/[^0-9]/', '', $order->get_shipping_phone() ?: $order->get_billing_phone());
+    $customer_phone = (strlen($customer_phone) == 10) ? '+1' . $customer_phone : '+' . ltrim($customer_phone, '+');
+
+    $delivery_data = [
+        'pickup_name'          => $pickup_name,
+        'pickup_address'       => trim($pickup_address),
+        'pickup_phone_number'  => $pickup_phone,
+        'dropoff_name'         => $order->get_shipping_first_name() . ' ' . $order->get_shipping_last_name(),
+        'dropoff_address'      => $order->get_shipping_address_1() . ', ' . $order->get_shipping_city() . ', ' . $order->get_shipping_state() . ' ' . $order->get_shipping_postcode() . ', US',
+        'dropoff_phone_number' => $customer_phone,
+        'manifest_items'       => []
+    ];
+
+    foreach ($order->get_items() as $item) {
+        $delivery_data['manifest_items'][] = [
+            'name'     => $item->get_name(),
+            'quantity' => $item->get_quantity(),
+        ];
+    }
+
+    $result = $api->create_delivery($delivery_data);
+
+    if (!is_wp_error($result) && isset($result['id'])) {
+        update_post_meta($order_id, '_uber_delivery_id', $result['id']);
+        $order->add_order_note('UBER DIRECT: Success! ID: ' . $result['id']);
+        return true;
+    } else {
+        $msg = is_wp_error($result) ? $result->get_error_message() : ($result['message'] ?? 'Error');
+        $order->add_order_note('UBER DIRECT FAILED: ' . $msg);
+        return $msg;
     }
 }
