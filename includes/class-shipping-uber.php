@@ -46,45 +46,47 @@ class WC_Uber_Shipping_Method extends WC_Shipping_Method {
      * AQUÍ VA EL MÉTODO
      * Este es el que calcula el precio en el carrito/checkout
      */
-    public function calculate_shipping($package = array()) {
-        $api = new Uber_API();
+   public function calculate_shipping($package = array()) {
+    $api = new Uber_API();
 
-        // 1. Obtener datos
-        $address_1 = isset($package['destination']['address_1']) ? trim($package['destination']['address_1']) : '';
-        $city      = isset($package['destination']['city']) ? trim($package['destination']['city']) : '';
-        $state     = isset($package['destination']['state']) ? trim($package['destination']['state']) : '';
-        $postcode  = isset($package['destination']['postcode']) ? trim($package['destination']['postcode']) : '';
+    // 1. Obtener datos y limpiar
+    $address_1 = isset($package['destination']['address_1']) ? trim($package['destination']['address_1']) : '';
+    $city      = isset($package['destination']['city']) ? trim($package['destination']['city']) : '';
+    $state     = isset($package['destination']['state']) ? trim($package['destination']['state']) : '';
+    $postcode  = isset($package['destination']['postcode']) ? trim($package['destination']['postcode']) : '';
 
-        // 2. Limpieza (Si el usuario pone la de prueba, forzamos datos reales)
-        if (strpos(strtolower($address_1), '19501 biscayne') !== false) {
-            $city = 'Aventura';
-            $postcode = '33180';
-            $state = 'FL';
-        }
+    // VALIDACIÓN CRUCIAL: Si la dirección es muy corta o no tiene ZIP, no llamamos a Uber
+    // Esto evita que el checkout se trabe mientras el usuario está escribiendo
+    if (strlen($address_1) < 5 || empty($postcode)) {
+        return; 
+    }
 
-        // 3. Matar el "1000"
-        if (is_numeric($city) || empty($city) || $city == '1000') {
-            $city = 'Miami';
-        }
+    // 2. Lógica de limpieza que ya tenías
+    if (strpos(strtolower($address_1), '19501 biscayne') !== false) {
+        $city = 'Aventura'; $postcode = '33180'; $state = 'FL';
+    }
 
-        // 4. Construir dirección
-        $full_destination = "{$address_1}, {$city}, {$state} {$postcode}";
+    if (is_numeric($city) || empty($city) || $city == '1000') {
+        $city = 'Miami';
+    }
 
-        // 5. Llamar a Uber
-        $quote = $api->get_delivery_quote($full_destination);
+    // 3. Construir dirección con el país al final (Uber lo ama así)
+    $full_destination = "{$address_1}, {$city}, {$state} {$postcode}, US";
 
-        if (!is_wp_error($quote) && isset($quote['fee'])) {
-            $this->add_rate(array(
-                'id'    => $this->get_rate_id(),
-                'label' => $this->title,
-                'cost'  => $quote['fee'] / 100, // Uber da el precio en centavos
-            ));
-        } else {
-            // Si falla, mostramos el error al administrador
-            if (current_user_can('manage_options')) {
-                $err_msg = is_wp_error($quote) ? $quote->get_error_message() : 'Sin cobertura';
-                wc_add_notice("DEBUG UBER: Error con [$full_destination] -> $err_msg", 'error');
-            }
+    // 4. Llamar a Uber
+    $quote = $api->get_delivery_quote($full_destination);
+
+    if (!is_wp_error($quote) && isset($quote['fee'])) {
+        $this->add_rate(array(
+            'id'    => $this->get_rate_id(),
+            'label' => $this->title . ' (Uber Direct)',
+            'cost'  => $quote['fee'] / 100, 
+        ));
+    } else {
+        // Log para el admin sin llenar la pantalla de errores al cliente
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            error_log("UBER DEBUG: Error cotizando para [$full_destination]. Respuesta: " . print_r($quote, true));
         }
     }
+}
 } 

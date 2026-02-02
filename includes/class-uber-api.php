@@ -64,36 +64,20 @@ class Uber_API {
    /**
  * Obtener Cotización de Envío (Quote)
  */
+/**
+ * Obtener Cotización (Quote) - Usa el String de los ajustes
+ */
 public function get_delivery_quote($dropoff_address_string) {
     $creds = $this->db->get_credentials();
     $token = $this->get_token();
 
     if (is_wp_error($token)) return $token;
 
-    // --- LÓGICA DINÁMICA PARA EL PICKUP (ORIGEN) ---
-    
-    // 1. Intentamos obtener la dirección del panel de ajustes de Uber
-    $pickup_raw = stripslashes($creds['pickup_address']);
-    
-    // 2. Si el campo está vacío, la construimos desde WooCommerce automáticamente
-    if (empty($pickup_raw)) {
-        $pickup_data = [
-            'street_address' => get_option('woocommerce_store_address'),
-            'city'           => get_option('woocommerce_store_city'),
-            'state'          => get_option('woocommerce_store_state'),
-            'zip_code'       => get_option('woocommerce_store_postcode'),
-            'country'        => 'US'
-        ];
-        $pickup_final = json_encode($pickup_data);
-    } else {
-        // Si el usuario escribió algo, verificamos si es JSON o String
-        $decoded = json_decode($pickup_raw, true);
-        $pickup_final = (json_last_error() === JSON_ERROR_NONE) ? $pickup_raw : $pickup_raw;
-    }
+    // Limpiamos el string de la dirección del negocio (Pickup)
+    $pickup_address = trim(stripslashes($creds['pickup_address']));
 
     $url = "{$this->base_url}/customers/{$creds['customer_id']}/delivery_quotes";
 
-    // 3. Petición a Uber
     $response = wp_remote_post($url, [
         'headers' => [
             'Authorization' => 'Bearer ' . $token,
@@ -101,60 +85,56 @@ public function get_delivery_quote($dropoff_address_string) {
         ],
         'timeout' => 15,
         'body'    => json_encode([
-            'pickup_address'  => $pickup_final,
+            'pickup_address'  => $pickup_address, // String limpio
             'dropoff_address' => $dropoff_address_string,
         ]),
     ]);
 
     if (is_wp_error($response)) return $response;
 
-    $body = wp_remote_retrieve_body($response);
-    $result = json_decode($body, true);
+    $result = json_decode(wp_remote_retrieve_body($response), true);
 
-    // 4. Manejo de errores (En Inglés como pediste)
     if (isset($result['code'])) {
-        $msg = isset($result['message']) ? $result['message'] : 'Uber Quote Error';
-        
-        if ($result['code'] === 'pickup_address_not_found') {
-            return new WP_Error('uber_geo_error', 'Store address (Pickup) not recognized by Uber. Please check your settings.');
-        }
-        
-        return new WP_Error('uber_api_error', $msg);
+        return new WP_Error('uber_api_error', $result['message'] ?? 'Error en cotización');
     }
 
     return $result;
 }
-    /**
-     * Crear la Entrega Real
-     */
-    public function create_delivery($order_data) {
-        $creds = $this->db->get_credentials();
-        $token = $this->get_token();
 
-        if (is_wp_error($token)) return $token;
+/**
+ * Crear Entrega Real (Create Delivery) - También con String limpio
+ */
+public function create_delivery($order_data) {
+    $creds = $this->db->get_credentials();
+    $token = $this->get_token();
 
-        $url = "{$this->base_url}/customers/{$creds['customer_id']}/deliveries";
+    if (is_wp_error($token)) return $token;
 
-        if ($creds['api_mode'] === 'sandbox') {
-            $order_data['test_specifications'] = [
-                'robo_courier_specification' => ['mode' => 'auto']
-            ];
-        }
+    // Aseguramos que la dirección de recogida sea el string limpio de los ajustes
+    $order_data['pickup_address'] = trim(stripslashes($creds['pickup_address']));
 
-        $response = wp_remote_post($url, [
-            'headers' => [
-                'Authorization' => 'Bearer ' . $token,
-                'Content-Type'  => 'application/json',
-            ],
-            'body' => json_encode($order_data),
-        ]);
+    $url = "{$this->base_url}/customers/{$creds['customer_id']}/deliveries";
 
-        $result = json_decode(wp_remote_retrieve_body($response), true);
-
-        if (isset($result['id'])) {
-            $this->db->guardar_pedido_en_historial($result, $order_data['dropoff_name'] ?? 'Cliente');
-        }
-
-        return $result;
+    if ($creds['api_mode'] === 'sandbox') {
+        $order_data['test_specifications'] = [
+            'robo_courier_specification' => ['mode' => 'auto']
+        ];
     }
+
+    $response = wp_remote_post($url, [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $token,
+            'Content-Type'  => 'application/json',
+        ],
+        'body' => json_encode($order_data),
+    ]);
+
+    $result = json_decode(wp_remote_retrieve_body($response), true);
+
+    if (isset($result['id'])) {
+        $this->db->guardar_pedido_en_historial($result, $order_data['dropoff_name'] ?? 'Cliente');
+    }
+
+    return $result;
+}
 }
