@@ -123,17 +123,18 @@ public function create_delivery($order_data) {
     $creds = $this->db->get_credentials();
     $token = $this->get_token();
     
+    if (is_wp_error($token)) {
+        error_log('Uber create_delivery ERROR: Token failed - ' . $token->get_error_message());
+        return $token;
+    }
 
-    if (is_wp_error($token)) 
-     {         error_log('Uber create_delivery ERROR: Token failed - ' . $token->get_error_message());
-
- return $token;
-
-
-     }  
-
-    // Aseguramos que la dirección de recogida sea el string limpio de los ajustes
     $order_data['pickup_address'] = trim(stripslashes($creds['pickup_address']));
+
+    // --- IMPORTANTE: El external_id debe ser un string ---
+    // Si no viene en $order_data, Uber no podrá reportar webhooks vinculados al pedido.
+    if (isset($order_data['order_id'])) {
+        $order_data['external_id'] = (string) $order_data['order_id'];
+    }
 
     $url = "{$this->base_url}/customers/{$creds['customer_id']}/deliveries";
 
@@ -142,14 +143,6 @@ public function create_delivery($order_data) {
             'robo_courier_specification' => ['mode' => 'auto']
         ];
     }
-
-// LOG 1: Qué se va a enviar
-    error_log('Uber create_delivery REQUEST:');
-    error_log('URL: ' . $url);
-    error_log('Data: ' . json_encode($order_data, JSON_PRETTY_PRINT));
-
-
-
 
     $response = wp_remote_post($url, [
         'headers' => [
@@ -161,7 +154,11 @@ public function create_delivery($order_data) {
 
     $result = json_decode(wp_remote_retrieve_body($response), true);
 
+    // Si Uber creó la entrega con éxito
     if (isset($result['id'])) {
+        // Pasamos el external_id también a tu base de datos local
+        $result['external_id'] = $order_data['external_id'] ?? '';
+        
         $this->db->guardar_pedido_en_historial($result, $order_data['dropoff_name'] ?? 'Cliente');
     }
 

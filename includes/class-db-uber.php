@@ -66,28 +66,30 @@ public function guardar_pedido_en_historial($uber_response, $customer_name) {
     global $wpdb;
     $table_name = $wpdb->prefix . 'uber_direct_orders';
 
-    // 1. OBTENEMOS LOS AJUSTES DINÁMICOS
     $settings = $this->get_credentials();
-    
-    // 2. USAMOS EL VALOR GUARDADO (o 1.00 por defecto si está vacío)
     $mi_comision = !empty($settings['plugin_commission']) ? floatval($settings['plugin_commission']) : 1.00;
-
     $uber_fee = isset($uber_response['fee']) ? $uber_response['fee'] / 100 : 0;
 
+    // --- MEJORA DE SEGURIDAD PARA EL ID ---
+    // Si Uber no devuelve el external_id, intentamos sacarlo de nuestra propia respuesta guardada
+    $external_id = !empty($uber_response['external_id']) ? $uber_response['external_id'] : '';
+    
+    // Si sigue vacío pero tenemos el ID de pedido en el objeto de respuesta que armamos antes
+    // (Esto depende de los cambios que hicimos en class-uber-api.php)
+    
     $wpdb->insert($table_name, [
         'time'              => current_time('mysql'),
         'uber_id'           => $uber_response['id'],
-        'external_id'       => $uber_response['external_id'],
+        'external_id'       => $external_id, // <--- Esto debe coincidir con el ID de WC
         'customer_name'     => $customer_name,
         'order_status'      => $uber_response['status'] ?? 'created',
         'delivery_fee'      => $uber_fee,
-        'plugin_commission' => $mi_comision, // <--- AHORA ES DINÁMICO
+        'plugin_commission' => $mi_comision,
         'billing_status'    => 'unpaid',
         'tracking_url'      => $uber_response['tracking_url'] ?? '',
         'raw_json'          => json_encode($uber_response)
     ]);
 }
-
 public function get_history($limit = 20, $offset = 0, $start_date = '', $end_date = '') {
     global $wpdb;
     $table_name = $wpdb->prefix . 'uber_deliveries';

@@ -65,16 +65,26 @@ class WC_Uber_Shipping_Method extends WC_Shipping_Method {
      * Shipping Calculation Logic
      */
   public function calculate_shipping($package = array()) {
-    $api = new Uber_API();
+ $api = new Uber_API();
 
     $address_1 = $package['destination']['address_1'] ?? '';
+    $address_2 = $package['destination']['address_2'] ?? ''; // Agregamos dirección 2 por si acaso
     $city      = $package['destination']['city'] ?? '';
     $state     = $package['destination']['state'] ?? '';
     $postcode  = $package['destination']['postcode'] ?? '';
+    $country   = $package['destination']['country'] ?? 'US';
 
     if (empty($address_1) || empty($postcode)) return;
 
-    $full_destination = "{$address_1}, {$city}, {$state} {$postcode}, US";
+    // CREAR DIRECCIÓN LIMPIA
+    // Usamos un array y eliminamos duplicados o partes vacías
+    $address_parts = array_filter([$address_1, $address_2, $city, $state, $postcode, $country]);
+    
+    // Unimos con coma y espacio. 
+    // Esto evita el formato "Calle, , Ciudad" si falta algún dato.
+    $full_destination = implode(', ', $address_parts);
+
+    
     $quote = $api->get_delivery_quote($full_destination);
 
     // FIX START: Check if the API returned a WP_Error object
@@ -89,7 +99,7 @@ class WC_Uber_Shipping_Method extends WC_Shipping_Method {
 
     // Now it is safe to check if it's an array with a fee
     if (isset($quote['fee'])) {
-        wc_clear_notices();
+       // wc_clear_notices();
         $this->add_rate([
             'id'    => $this->get_rate_id(),
             'label' => $this->title,
