@@ -26,6 +26,7 @@ class Uber_Database {
             'client_id'      => isset($data['uber_client_id']) ? sanitize_text_field($data['uber_client_id']) : $old_settings['client_id'],
             'client_secret'  => isset($data['uber_client_secret']) ? sanitize_text_field($data['uber_client_secret']) : $old_settings['client_secret'],
             'api_mode'       => isset($data['uber_api_mode']) ? sanitize_text_field($data['uber_api_mode']) : $old_settings['api_mode'],
+            'plugin_commission' => floatval($data['plugin_commission']), // <--- GUARDAR COMO NÚMERO
         );
 
         update_option($this->option_name, $settings);
@@ -58,23 +59,56 @@ class Uber_Database {
      * Guarda el resultado de un pedido de Uber en la tabla de historial
      * He adaptado los nombres de los campos a lo que devuelve el JSON de Uber
      */
-    public function guardar_pedido_en_historial($data, $customer_name) {
-        global $wpdb;
-        // Puedes decidir si usas la misma tabla o creas una nueva prefix_uber_orders
-        $table_name = $wpdb->prefix . 'uber_direct_orders';
+   /**
+ * Guarda la orden en el historial incluyendo datos para monetización
+ */
+public function guardar_pedido_en_historial($uber_response, $customer_name) {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'uber_direct_orders';
 
-        $wpdb->insert(
-            $table_name,
-            [
-                'time'          => current_time('mysql'),
-                'uber_id'       => $data['id'] ?? '', // ID que empieza con del_
-                'external_id'   => $data['external_id'] ?? '', // Tu ID de WP
-                'order_status'  => $data['status'] ?? 'pending',
-                'fee'           => $data['fee'] ?? 0,
-                'tracking_url'  => $data['tracking_url'] ?? '',
-                'customer_name' => $customer_name
-            ],
-            ['%s', '%s', '%s', '%s', '%d', '%s', '%s']
-        );
+    // 1. OBTENEMOS LOS AJUSTES DINÁMICOS
+    $settings = $this->get_credentials();
+    
+    // 2. USAMOS EL VALOR GUARDADO (o 1.00 por defecto si está vacío)
+    $mi_comision = !empty($settings['plugin_commission']) ? floatval($settings['plugin_commission']) : 1.00;
+
+    $uber_fee = isset($uber_response['fee']) ? $uber_response['fee'] / 100 : 0;
+
+    $wpdb->insert($table_name, [
+        'time'              => current_time('mysql'),
+        'uber_id'           => $uber_response['id'],
+        'external_id'       => $uber_response['external_id'],
+        'customer_name'     => $customer_name,
+        'order_status'      => $uber_response['status'] ?? 'created',
+        'delivery_fee'      => $uber_fee,
+        'plugin_commission' => $mi_comision, // <--- AHORA ES DINÁMICO
+        'billing_status'    => 'unpaid',
+        'tracking_url'      => $uber_response['tracking_url'] ?? '',
+        'raw_json'          => json_encode($uber_response)
+    ]);
+}
+
+public function get_history($limit = 20, $offset = 0, $start_date = '', $end_date = '') {
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'uber_deliveries';
+    
+    $query = "SELECT * FROM $table_name WHERE 1=1";
+    $params = [];
+
+    // Filtro por fechas
+    if (!empty($start_date) && !empty($end_date)) {
+        $query .= " AND created_at BETWEEN %s AND %s";
+        $params[] = $start_date . ' 00:00:00';
+        $params[] = $end_date . ' 23:59:59';
     }
+
+    // Paginación
+    $query .= " ORDER BY created_at DESC LIMIT %d OFFSET %d";
+    $params[] = $limit;
+    $params[] = $offset;
+
+    return $wpdb->get_results($wpdb->prepare($query, ...$params));
+}
+
+
 }

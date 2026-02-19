@@ -3,6 +3,16 @@ if (!defined('ABSPATH')) exit;
 
 class WC_Uber_Shipping_Method extends WC_Shipping_Method {
 
+    // Declare properties to prevent PHP 8+ "Deprecated" errors
+    public $id;
+    public $instance_id;
+    public $method_title;
+    public $method_description;
+    public $supports;
+    public $title;
+    public $enabled;
+    public $form_fields; // Fixed variable name for WooCommerce standards
+
     public function __construct($instance_id = 0) {
         $this->id                 = 'uber_shipping';
         $this->instance_id        = absint($instance_id);
@@ -14,79 +24,91 @@ class WC_Uber_Shipping_Method extends WC_Shipping_Method {
     }
 
     function init() {
-        $this->init_form_fields();
+        // Load the form fields
+        $this->init_form_fields(); 
         $this->init_settings();
-        $this->title = $this->get_option('title', 'Uber Delivery');
+
+        // Define the Title seen by the customer in English
+        $this->title   = $this->get_option('title', 'Uber Delivery');
+        $this->enabled = $this->get_option('enabled', 'yes');
 
         add_action('woocommerce_update_options_shipping_' . $this->id, array($this, 'process_admin_options'));
     }
 
-    // Configuración básica dentro de WooCommerce > Settings > Shipping
+    /**
+     * Admin Settings Configuration
+     */
     public function init_form_fields() {
-        $this->shipping_fields = array(
+        $this->form_fields = array(
+            'enabled' => array(
+                'title'   => __('Enable/Disable', 'uber-direct'),
+                'type'    => 'checkbox',
+                'label'   => __('Enable Uber Direct', 'uber-direct'),
+                'default' => 'yes',
+            ),
             'title' => array(
-                'title'       => __('Title', 'uber-direct'),
+                'title'       => __('Method Title', 'uber-direct'),
                 'type'        => 'text',
-                'description' => __('This is what the customer sees during checkout.', 'uber-direct'),
+                'description' => __('This is the delivery option name the customer sees during checkout.', 'uber-direct'),
                 'default'     => __('Uber Delivery', 'uber-direct'),
             ),
             'markup' => array(
                 'title'       => __('Fee Markup (Optional)', 'uber-direct'),
                 'type'        => 'number',
-                'description' => __('Extra amount to add to Uber quote (e.g. 2.00)', 'uber-direct'),
+                'description' => __('Additional amount to add to the Uber quote (e.g. 5.00).', 'uber-direct'),
                 'default'     => '0',
             )
         );
     }
 
     /**
-     * CALCULAR EL PRECIO (La magia ocurre aquí)
+     * Shipping Calculation Logic
      */
- /**
-     * AQUÍ VA EL MÉTODO
-     * Este es el que calcula el precio en el carrito/checkout
-     */
-   public function calculate_shipping($package = array()) {
+  public function calculate_shipping($package = array()) {
     $api = new Uber_API();
 
-    // 1. Obtener datos y limpiar
-    $address_1 = isset($package['destination']['address_1']) ? trim($package['destination']['address_1']) : '';
-    $city      = isset($package['destination']['city']) ? trim($package['destination']['city']) : '';
-    $state     = isset($package['destination']['state']) ? trim($package['destination']['state']) : '';
-    $postcode  = isset($package['destination']['postcode']) ? trim($package['destination']['postcode']) : '';
+    $address_1 = $package['destination']['address_1'] ?? '';
+    $city      = $package['destination']['city'] ?? '';
+    $state     = $package['destination']['state'] ?? '';
+    $postcode  = $package['destination']['postcode'] ?? '';
 
-    // VALIDACIÓN CRUCIAL: Si la dirección es muy corta o no tiene ZIP, no llamamos a Uber
-    // Esto evita que el checkout se trabe mientras el usuario está escribiendo
-    if (strlen($address_1) < 5 || empty($postcode)) {
-        return; 
-    }
+    if (empty($address_1) || empty($postcode)) return;
 
-    // 2. Lógica de limpieza que ya tenías
-    if (strpos(strtolower($address_1), '19501 biscayne') !== false) {
-        $city = 'Aventura'; $postcode = '33180'; $state = 'FL';
-    }
-
-    if (is_numeric($city) || empty($city) || $city == '1000') {
-        $city = 'Miami';
-    }
-
-    // 3. Construir dirección con el país al final (Uber lo ama así)
     $full_destination = "{$address_1}, {$city}, {$state} {$postcode}, US";
-
-    // 4. Llamar a Uber
     $quote = $api->get_delivery_quote($full_destination);
 
-    if (!is_wp_error($quote) && isset($quote['fee'])) {
-        $this->add_rate(array(
+    // FIX START: Check if the API returned a WP_Error object
+    if (is_wp_error($quote)) {
+        $error_message = "Uber Direct Error: " . $quote->get_error_message();
+        
+        if (!wc_has_notice($error_message, 'error')) {
+            wc_add_notice($error_message, 'error');
+        }
+        return; // Exit safely
+    }
+
+    // Now it is safe to check if it's an array with a fee
+    if (isset($quote['fee'])) {
+        wc_clear_notices();
+        $this->add_rate([
             'id'    => $this->get_rate_id(),
-            'label' => $this->title . ' (Uber Direct)',
-            'cost'  => $quote['fee'] / 100, 
-        ));
-    } else {
-        // Log para el admin sin llenar la pantalla de errores al cliente
-        if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log("UBER DEBUG: Error cotizando para [$full_destination]. Respuesta: " . print_r($quote, true));
+            'label' => $this->title,
+            'cost'  => (float) $quote['fee'] / 100,
+        ]);
+    } 
+    // Handle specific Uber error codes inside the array
+    elseif (isset($quote['code'])) {
+        $msg = "Delivery unavailable: ";
+        
+        if ($quote['code'] === 'address_undeliverable') {
+            $msg .= $quote['metadata']['details'] ?? "Address is outside delivery radius.";
+        } else {
+            $msg .= $quote['message'] ?? "Unknown API error.";
+        }
+
+        if (!wc_has_notice($msg, 'error')) {
+            wc_add_notice($msg, 'error');
         }
     }
 }
-} 
+}

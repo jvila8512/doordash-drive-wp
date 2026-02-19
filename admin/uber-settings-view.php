@@ -70,6 +70,7 @@ $uber_settings = get_option('uber_api_settings', []);
                             <th>Phone</th>
                             <td><input name="pickup_phone" type="text" value="<?php echo esc_attr($uber_settings['pickup_phone'] ?? ''); ?>" class="regular-text"></td>
                         </tr>
+                                        
                     </table>
                 </div>
             </div>
@@ -90,6 +91,14 @@ $uber_settings = get_option('uber_api_settings', []);
                             <th>Client Secret</th>
                             <td><input name="uber_client_secret" type="password" value="<?php echo esc_attr($uber_settings['client_secret'] ?? ''); ?>" class="regular-text"></td>
                         </tr>
+                                            <tr>
+                        <th scope="row"><label for="plugin_commission">Commission per Order ($)</label></th>
+                        <td>
+                            <input name="plugin_commission" type="number" step="0.01" id="plugin_commission" 
+                                value="<?php echo esc_attr($uber_settings['plugin_commission'] ?? '1.00'); ?>" class="regular-text">
+                            <p class="description">Amount you will charge the merchant for each successful Uber delivery.</p>
+                        </td>
+</tr>
                         <tr>
                             <th>Environment</th>
                             <td>

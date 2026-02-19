@@ -166,19 +166,26 @@ function ub_render_uber_box($post) {
 add_action('woocommerce_order_status_processing', 'ub_check_and_dispatch_uber', 10, 1);
 
 function ub_check_and_dispatch_uber($order_id) {
+   // error_log('=== ub_check_and_dispatch_uber TRIGGERED for order: ' . $order_id . ' ===');
+    
     $order = wc_get_order($order_id);
     
     // 1. VALIDACIÓN: ¿El cliente eligió Uber como envío?
     $shipping_methods = $order->get_shipping_methods();
+   // error_log('Total shipping methods: ' . count($shipping_methods));
+    
     $shipping_method = reset($shipping_methods);
     $method_id = $shipping_method ? $shipping_method->get_method_id() : '';
+    
+   // error_log('Shipping method ID detected: ' . $method_id);
 
     // Solo continuamos si el ID del método contiene la palabra 'uber'
     if (strpos($method_id, 'uber') !== false) {
+      //  error_log('Method contains "uber", calling ub_disparar_entrega_uber()...');
         return ub_disparar_entrega_uber($order_id);
     }
     
-    // Si no fue Uber, no hacemos nada
+    //error_log('Method does NOT contain "uber", skipping Uber delivery.');
     return;
 }
 // AJAX: Save Settings (ESTO ES LO QUE TE FALTABA)
@@ -204,8 +211,15 @@ function ub_ajax_save_settings_handler() {
 
 // 7. LA FUNCIÓN QUE REALMENTE ENVÍA A UBER (Esta es la que te faltaba)
 function ub_disparar_entrega_uber($order_id) {
+  //  error_log('=== ub_disparar_entrega_uber STARTED for order: ' . $order_id . ' ===');
+    
     $order = wc_get_order($order_id);
-    if (get_post_meta($order_id, '_uber_delivery_id', true)) return true;
+    if (get_post_meta($order_id, '_uber_delivery_id', true)) {
+      //  error_log('Order already sent to Uber, skipping.');
+        return true;
+    }
+
+    error_log('Building delivery data...');
 
     $api = new Uber_API();
     $db  = new Uber_Database();
@@ -237,26 +251,31 @@ function ub_disparar_entrega_uber($order_id) {
         ];
     }
 
+   // error_log('Delivery data prepared: ' . json_encode($delivery_data));
+   // error_log('Calling create_delivery()...');
+
     $result = $api->create_delivery($delivery_data);
 
+   // error_log('create_delivery() returned: ' . json_encode($result));
+
     if (!is_wp_error($result) && isset($result['id'])) {
+        error_log('SUCCESS: Uber delivery created with ID: ' . $result['id']);
         update_post_meta($order_id, '_uber_delivery_id', $result['id']);
         $order->add_order_note('UBER DIRECT: Success! ID: ' . $result['id']);
 
-        // 2. AGREGAR ESTA LÍNEA: Guardamos la URL de rastreo para el cliente
         if (isset($result['tracking_url'])) {
             update_post_meta($order_id, '_uber_tracking_url', $result['tracking_url']);
+            error_log('Tracking URL saved: ' . $result['tracking_url']);
         }
-
 
         return true;
     } else {
         $msg = is_wp_error($result) ? $result->get_error_message() : ($result['message'] ?? 'Error');
+      //  error_log('FAILED: ' . $msg);
         $order->add_order_note('UBER DIRECT FAILED: ' . $msg);
         return $msg;
     }
 }
-
 
 
 /**
