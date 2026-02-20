@@ -18,8 +18,11 @@ class Uber_API {
      * MÉTODO PARA TEST: Valida credenciales enviadas desde el formulario AJAX
      */
 public function get_access_token_test($client_id, $client_secret, $mode = 'sandbox') {
-    // Según tu doc, el scope es siempre este
-   $scope = ($mode === 'sandbox') ? 'eats.deliveries' : 'direct.organizations';
+    // CORRECCIÓN: En producción necesitamos AMBOS scopes. 
+    // En sandbox, usualmente con eats.deliveries basta, pero no sobra poner ambos.
+    $scope = ($mode === 'sandbox') 
+        ? 'eats.deliveries' 
+        : 'eats.deliveries direct.organizations'; // Espacio entre ellos
 
     $response = wp_remote_post('https://auth.uber.com/oauth/v2/token', [
         'headers' => [
@@ -38,30 +41,48 @@ public function get_access_token_test($client_id, $client_secret, $mode = 'sandb
     $body = json_decode(wp_remote_retrieve_body($response));
 
     if (isset($body->access_token)) {
-        return $body->access_token; // Solo devuelve el string, no guarda nada
+        return $body->access_token;
     }
 
-    return new WP_Error('uber_error', $body->error ?? 'Unknown Error');
+    // Tip: Uber suele devolver el error en $body->error o $body->message
+    $error_msg = $body->error ?? $body->message ?? 'Unknown Error';
+    return new WP_Error('uber_error', $error_msg);
 }
 
     /**
      * Obtiene el Token de acceso (con caché de WordPress)
      */
    private function get_token() {
-    // Primero revisamos si ya lo tenemos guardado
+    // 1. Intentar obtener el token guardado
     $token = get_transient('uber_access_token');
-    if ($token) return $token;
+    
+    if ($token) {
+        error_log("UBER DEBUG: Token recuperado de TRANSIENT. Primeros 15: " . substr($token, 0, 15));
+        return $token;
+    }
 
-    // Si no está, lo pedimos
+    error_log("UBER DEBUG: No hay token en transient. Solicitando uno nuevo...");
+
+    // 2. Si no hay token, lo solicitamos
     $creds = $this->db->get_credentials();
-    $token_result = $this->get_access_token_test($creds['client_id'], $creds['client_secret'], $creds['api_mode']);
+    
+    error_log("UBER DEBUG: Usando Client ID: " . $creds['client_id'] . " en modo: " . $creds['api_mode']);
 
-    // Si Uber nos dio el token, LO GUARDAMOS por 25 días
+    $token_result = $this->get_access_token_test(
+        $creds['client_id'], 
+        $creds['client_secret'], 
+        $creds['api_mode']
+    );
+
     if (!is_wp_error($token_result)) {
-        set_transient('uber_access_token', $token_result, 25 * DAY_IN_SECONDS);
+        error_log("UBER DEBUG: Token nuevo generado con ÉXITO.");
+        
+        // Guardar por 7 días
+        set_transient('uber_access_token', $token_result, 7 * DAY_IN_SECONDS);
         return $token_result;
     }
 
+    error_log("UBER DEBUG: ERROR al generar token: " . $token_result->get_error_message());
     return $token_result;
 }
    /**
@@ -74,18 +95,26 @@ public function get_delivery_quote($dropoff_address_string) {
     $creds = $this->db->get_credentials();
     $token = $this->get_token();
 
-    // If token generation fails, return the error
     if (is_wp_error($token)) {
+       // error_log("UBER DEBUG: Error obteniendo token: " . $token->get_error_message());
         return $token;
     }
 
-    // Clean and sanitize the pickup address (Origin)
-    $pickup_address = trim(stripslashes($creds['pickup_address']));
-    
-    // Clean and sanitize the dropoff address (Destination)
-    $dropoff_address = trim(stripslashes($dropoff_address_string));
-
     $url = "{$this->base_url}/customers/{$creds['customer_id']}/delivery_quotes";
+    
+    // Preparamos el Body
+    $payload = [
+        'pickup_address'  => $creds['pickup_address'], 
+        'dropoff_address' => $dropoff_address_string,
+        'pickup_times'    => [0]
+    ];
+
+    $json_payload = json_encode($payload);
+
+    // --- LOGS DE SALIDA ---
+    //error_log("UBER DEBUG: URL -> " . $url);
+   // error_log("UBER DEBUG: TOKEN (primeros 15) -> " . substr($token, 0, 15) . "...");
+   // error_log("UBER DEBUG: PAYLOAD ENVIADO -> " . $json_payload);
 
     $response = wp_remote_post($url, [
         'headers' => [
@@ -93,24 +122,27 @@ public function get_delivery_quote($dropoff_address_string) {
             'Content-Type'  => 'application/json',
             'Accept'        => 'application/json',
         ],
-        'timeout' => 20, // Increased timeout for external API stability
-        'body'    => json_encode([
-            'pickup_address'  => $pickup_address,
-            'dropoff_address' => $dropoff_address,
-        ]),
+        'timeout' => 20,
+        'body'    => $json_payload,
     ]);
 
-    // Handle connection or WordPress-level errors
+    // --- LOGS DE RESPUESTA ---
     if (is_wp_error($response)) {
+       // error_log("UBER DEBUG: WP_ERROR -> " . $response->get_error_message());
         return $response;
     }
 
-    $result = json_decode(wp_remote_retrieve_body($response), true);
+    $status_code = wp_remote_retrieve_response_code($response);
+    $response_body = wp_remote_retrieve_body($response);
 
-    // Handle Uber API specific errors (e.g., unauthorized, distance_too_far)
-    if (isset($result['code'])) {
-        $error_message = isset($result['message']) ? $result['message'] : 'Error retrieving quote from Uber.';
-        return new WP_Error('uber_api_error', $error_message);
+   // error_log("UBER DEBUG: HTTP STATUS -> " . $status_code);
+   // error_log("UBER DEBUG: RESPONSE BODY -> " . $response_body);
+
+    $result = json_decode($response_body, true);
+
+    if (isset($result['code']) || isset($result['error']) || $status_code >= 400) {
+        $error_message = $result['message'] ?? 'Error en la API de Uber.';
+        return new WP_Error('uber_api_error', $error_message, $result);
     }
 
     return $result;
@@ -124,44 +156,57 @@ public function create_delivery($order_data) {
     $token = $this->get_token();
     
     if (is_wp_error($token)) {
-        error_log('Uber create_delivery ERROR: Token failed - ' . $token->get_error_message());
         return $token;
     }
 
-    $order_data['pickup_address'] = trim(stripslashes($creds['pickup_address']));
+    // 1. Asegurar que las direcciones sean JSON Strings
+    // Si ya vienen como string desde el quote, perfecto. Si son arrays, hay que encodearlos.
+    if (is_array($creds['pickup_address'])) {
+        $order_data['pickup_address'] = json_encode($creds['pickup_address']);
+    } else {
+        $order_data['pickup_address'] = $creds['pickup_address'];
+    }
 
-    // --- IMPORTANTE: El external_id debe ser un string ---
-    // Si no viene en $order_data, Uber no podrá reportar webhooks vinculados al pedido.
+    if (is_array($order_data['dropoff_address'])) {
+        $order_data['dropoff_address'] = json_encode($order_data['dropoff_address']);
+    }
+
+    // 2. Manejo del ID externo
     if (isset($order_data['order_id'])) {
         $order_data['external_id'] = (string) $order_data['order_id'];
     }
 
-    $url = "{$this->base_url}/customers/{$creds['customer_id']}/deliveries";
-
+    // 3. Configuración de Sandbox
     if ($creds['api_mode'] === 'sandbox') {
         $order_data['test_specifications'] = [
             'robo_courier_specification' => ['mode' => 'auto']
         ];
     }
 
+    $url = "{$this->base_url}/customers/{$creds['customer_id']}/deliveries";
+
     $response = wp_remote_post($url, [
         'headers' => [
             'Authorization' => 'Bearer ' . $token,
             'Content-Type'  => 'application/json',
         ],
-        'body' => json_encode($order_data),
+        'timeout' => 30, // Crear una entrega puede tardar un poco más
+        'body'    => json_encode($order_data),
     ]);
+
+    if (is_wp_error($response)) return $response;
 
     $result = json_decode(wp_remote_retrieve_body($response), true);
 
-    // Si Uber creó la entrega con éxito
+    // 4. Verificación de éxito de Uber
     if (isset($result['id'])) {
-        // Pasamos el external_id también a tu base de datos local
         $result['external_id'] = $order_data['external_id'] ?? '';
-        
         $this->db->guardar_pedido_en_historial($result, $order_data['dropoff_name'] ?? 'Cliente');
+        return $result;
     }
 
-    return $result;
+    // Manejo de errores de la API
+    $error_msg = $result['message'] ?? 'Error desconocido al crear la entrega.';
+    return new WP_Error('uber_delivery_failed', $error_msg, $result);
 }
 }

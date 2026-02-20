@@ -74,11 +74,15 @@ function ub_ajax_test_handler() {
 
     // 3. Enviamos la respuesta estructurada para que el JS NO de error "Done"
     if (!is_wp_error($token)) {
-        wp_send_json_success([
-            'message' => 'Connection successful! Token generated.',
-            'token'   => $token // Opcional, para debug
-        ]);
-    } else {
+    // Sobreescribe siempre el token anterior
+    update_option('ub_access_token', $token);
+    update_option('ub_api_mode', $api_mode);
+
+    wp_send_json_success([
+        'message' => 'Connection successful! Token generated.',
+        'token'   => $token
+    ]);
+} else {
         wp_send_json_error([
             'message' => 'Authentication failed: ' . $token->get_error_message()
         ]);
@@ -709,3 +713,4 @@ function ub_ajax_manual_dispatch() {
     }
     exit;
 }
+
