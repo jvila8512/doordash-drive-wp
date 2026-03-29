@@ -49,7 +49,7 @@ $uber_settings = get_option('uber_api_settings', []);
             <div style="background: #eee; padding: 5px 12px; border-radius: 15px; font-size: 11px; font-weight: bold;">V <?php echo $plugin_version; ?></div>
         </div>
 
-        <div id="ub-ajax-response"></div>
+        
 
         <form id="uber-settings-form" method="POST">
             <input type="hidden" id="ub_save_nonce" value="<?php echo wp_create_nonce('uber_save_creds'); ?>">
@@ -121,6 +121,7 @@ $uber_settings = get_option('uber_api_settings', []);
                     <span class="dashicons dashicons-admin-links"></span> Test API Connection
                 </button>
             </div>
+            <div id="ub-ajax-response"></div>
 
             <div class="uber-card">
                 <div class="uber-card-header"><h2>3. System Logs</h2></div>

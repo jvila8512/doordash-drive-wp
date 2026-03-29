@@ -3,7 +3,7 @@
  * Plugin Name:       Uber Direct Integration
  * Description:       Professional integration for managing deliveries via Uber Direct API.
  * Version:           1.0.4
- * Author:            Javy Vila Labrada
+ * Author:            Ermis Media Production
  */
 
 if (!defined('ABSPATH')) exit;
