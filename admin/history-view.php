@@ -177,6 +177,44 @@ $('#btn-export-pdf').on('click', function() {
         $('#start_date, #end_date').val('');
         loadHistory(1);
     });
+    
+    // Evento para el botón "Mark as Delivered"
+    $(document).on('click', '.btn-mark-delivered', function(e) {
+        e.preventDefault();
+        const $btn = $(this);
+        const id = $btn.data('id');
+        const externalId = $btn.data('external');
+        
+        if (!confirm('Are you sure you want to mark this order as DELIVERED?')) {
+            return;
+        }
+        
+        $btn.prop('disabled', true).text('Processing...');
+        
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'ub_mark_delivered',
+                nonce: '<?php echo wp_create_nonce("uber_admin_nonce"); ?>',
+                id: id,
+                external_id: externalId
+            },
+            success: function(response) {
+                if (response.success) {
+                    alert('Order marked as DELIVERED successfully!');
+                    loadHistory(); // Refresh the table
+                } else {
+                    alert('Error: ' + (response.data?.message || 'Unknown error'));
+                    $btn.prop('disabled', false).html('<span class="dashicons dashicons-yes-alt" style="font-size:14px; width:14px; height:14px; margin-right:4px;"></span> Delivered');
+                }
+            },
+            error: function() {
+                alert('Connection error');
+                $btn.prop('disabled', false).html('<span class="dashicons dashicons-yes-alt" style="font-size:14px; width:14px; height:14px; margin-right:4px;"></span> Delivered');
+            }
+        });
+    });
 
 });
 </script>

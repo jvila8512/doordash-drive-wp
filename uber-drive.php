@@ -475,6 +475,47 @@ function ub_export_history_pdf() {
 }
 
 
+// --- 7. MANUAL MARK AS DELIVERED ---
+add_action('wp_ajax_ub_mark_delivered', 'ub_ajax_mark_delivered');
+
+function ub_ajax_mark_delivered() {
+    check_ajax_referer('uber_admin_nonce', 'nonce');
+    
+    if (!current_user_can('manage_options')) {
+        wp_send_json_error(['message' => 'No access']);
+    }
+    
+    global $wpdb;
+    $table_name = $wpdb->prefix . 'uber_direct_orders';
+    
+    $id = isset($_POST['id']) ? intval($_POST['id']) : 0;
+    $external_id = isset($_POST['external_id']) ? intval($_POST['external_id']) : 0;
+    
+    if ($id <= 0) {
+        wp_send_json_error(['message' => 'Invalid order ID']);
+    }
+    
+    // Update history table
+    $wpdb->update(
+        $table_name,
+        ['order_status' => 'delivered'],
+        ['id' => $id]
+    );
+    
+    // Update WooCommerce order meta if we have the external_id (WooCommerce order ID)
+    if ($external_id > 0) {
+        update_post_meta($external_id, '_uber_order_status', 'delivered');
+        
+        // Add order note
+        $order = wc_get_order($external_id);
+        if ($order) {
+            $order->add_order_note('Uber Direct: Marked as DELIVERED manually (webhook failed or manual override)');
+        }
+    }
+    
+    wp_send_json_success(['message' => 'Order marked as delivered']);
+}
+
 //Ultimos cambios para la actualizacion del estado de la orden..
 
 
@@ -556,38 +597,84 @@ function ub_handle_uber_webhook( $request ) {
     // ============================================================
     $params = $request->get_json_params();
     
-    // Uber sends the order ID in 'external_id'
-    $order_id = isset($params['external_id']) ? intval($params['external_id']) : 0;
-    $new_status = isset($params['status']) ? sanitize_text_field($params['status']) : '';
-    $tracking_url = isset($params['tracking_url']) ? esc_url_raw($params['tracking_url']) : '';
-
-    if ( $order_id > 0 && !empty($new_status) ) {
-        $table_name = $wpdb->prefix . 'uber_direct_orders';
-
-        // 1. Update your custom History Table
+    // Obtener delivery_id de Uber (SIEMPRE viene)
+    $delivery_id = $params['delivery_id'] ?? '';
+    $external_id = $params['external_id'] ?? '';
+    
+    // Status puede venir en la raíz o dentro de data
+    $new_status = isset($params['status']) 
+        ? sanitize_text_field($params['status']) 
+        : sanitize_text_field($params['data']['status'] ?? '');
+    
+    // Tracking URL está dentro de data
+    $tracking_url = isset($params['data']['tracking_url']) 
+        ? esc_url_raw($params['data']['tracking_url']) 
+        : '';
+    
+    error_log("UBER WEBHOOK: Received - delivery_id: " . $delivery_id . ", status: " . $new_status);
+    
+    // ============================================================
+    // 3. ENCONTRAR LA ORDEN
+    // ============================================================
+    $table_name = $wpdb->prefix . 'uber_direct_orders';
+    $order_id = 0;
+    
+    if (!empty($external_id)) {
+        // Intentar primero con external_id (si viene con valor)
+        $order_id = intval($external_id);
+        error_log("UBER WEBHOOK: Searching by external_id: " . $order_id);
+    }
+    
+    if ($order_id <= 0 && !empty($delivery_id)) {
+        // Buscar por delivery_id de Uber (uber_id en la tabla)
+        $row = $wpdb->get_row($wpdb->prepare(
+            "SELECT external_id FROM $table_name WHERE uber_id = %s LIMIT 1",
+            $delivery_id
+        ));
+        
+        if ($row) {
+            $order_id = intval($row->external_id);
+            error_log("UBER WEBHOOK: Found order by uber_id, WooCommerce order ID: " . $order_id);
+        } else {
+            error_log("UBER WEBHOOK: Order NOT found by uber_id: " . $delivery_id);
+        }
+    }
+    
+    // Si no encontramos la orden, responder 200 pero con mensaje de error
+    if ($order_id <= 0) {
+        error_log("UBER WEBHOOK: Could not find order. delivery_id: " . $delivery_id . ", external_id: " . $external_id);
+        return new WP_REST_Response( array( 'success' => false, 'message' => 'Order not found' ), 200 );
+    }
+    
+    // ============================================================
+    // 4. ACTUALIZAR LA ORDEN
+    // ============================================================
+    if (!empty($new_status)) {
+        // 1. Update custom History Table
         $wpdb->update(
             $table_name,
             array( 'order_status' => $new_status ),
             array( 'external_id'  => (string)$order_id )
         );
-
-        // 2. Update WooCommerce Order Meta (for the column)
+        
+        // 2. Update WooCommerce Order Meta
         update_post_meta( $order_id, '_uber_order_status', $new_status );
         
         // 3. Update tracking URL if provided
         if (!empty($tracking_url)) {
             update_post_meta( $order_id, '_uber_tracking_url', $tracking_url );
         }
-
-        // 4. Add Order Note in English
+        
+        // 4. Add Order Note
         $order = wc_get_order( $order_id );
         if ( $order ) {
             $order->add_order_note( "Uber Direct Update: Status changed to " . strtoupper($new_status) );
         }
-
-        return new WP_REST_Response( array( 'success' => true ), 200 );
+        
+        error_log("UBER WEBHOOK: Order #" . $order_id . " updated to status: " . $new_status);
     }
-    return new WP_REST_Response( array( 'message' => 'Invalid Data' ), 400 );
+    
+    return new WP_REST_Response( array( 'success' => true ), 200 );
 }
 
 // --- 2. PROFESSIONAL COLUMN LOGIC (INGLÉS + COLORES) ---

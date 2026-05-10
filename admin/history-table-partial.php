@@ -14,7 +14,7 @@
                 $<?php echo number_format($orden->plugin_commission, 2); ?>
             </td>
             <td>
-                <div style="display:flex; gap:5px; align-items: center;">
+                <div style="display:flex; gap:5px; align-items: center; flex-wrap: wrap;">
     <?php if (!empty($orden->tracking_url)) : ?>
         <a href="<?php echo esc_url($orden->tracking_url); ?>" 
            target="_blank" 
@@ -24,6 +24,18 @@
             <span class="dashicons dashicons-location" style="font-size:14px; width:14px; height:14px; margin-right:4px;"></span> 
             Track
         </a>
+    <?php endif; ?>
+
+    <?php if ($orden->order_status !== 'delivered' && $orden->order_status !== 'completed') : ?>
+        <button type="button" 
+                class="button button-small button-primary btn-mark-delivered" 
+                data-id="<?php echo $orden->id; ?>"
+                data-external="<?php echo esc_attr($orden->external_id); ?>"
+                title="Mark as Delivered"
+                style="display: inline-flex; align-items: center; justify-content: center; background: #27ae60; border-color: #27ae60;">
+            <span class="dashicons dashicons-yes-alt" style="font-size:14px; width:14px; height:14px; margin-right:4px;"></span> 
+            Delivered
+        </button>
     <?php endif; ?>
 
     <button type="button" 
