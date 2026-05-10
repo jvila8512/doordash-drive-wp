@@ -108,6 +108,24 @@ $uber_settings = get_option('uber_api_settings', []);
                                 </select>
                             </td>
                         </tr>
+                        <tr>
+                            <th>Restaurant Prep Time (minutes)</th>
+                            <td>
+                                <input name="prep_time" type="number" min="0" max="120" 
+                                    value="<?php echo esc_attr($uber_settings['prep_time'] ?? '0'); ?>" 
+                                    class="regular-text" style="width: 100px;">
+                                <p class="description">Time the restaurant needs to prepare the order before pickup. Minimum 20 minutes required by Uber. Default: 0 (ASAP).</p>
+                            </td>
+                        </tr>
+                        <tr>
+                            <th>Uber Webhook Signing Key</th>
+                            <td>
+                                <input name="uber_webhook_key" type="text" 
+                                    value="<?php echo esc_attr($uber_settings['webhook_key'] ?? ''); ?>" 
+                                    class="regular-text code" placeholder="e.g., c5c26d5a-70d6-46c7-a652-d7c09825ad29">
+                                <p class="description">Get this from Uber Direct Dashboard → Webhooks → Edit → Signing Key. Used to validate incoming webhook requests.</p>
+                            </td>
+                        </tr>
                     </table>
                 </div>
             </div>
@@ -121,6 +139,30 @@ $uber_settings = get_option('uber_api_settings', []);
                     <span class="dashicons dashicons-admin-links"></span> Test API Connection
                 </button>
             </div>
+
+            <!-- Webhook URL Section -->
+            <div class="uber-card" style="border-left: 5px solid #06d6a0; margin-bottom: 25px;">
+                <div class="uber-card-header"><h2>🔗 Webhook URL</h2></div>
+                <div class="uber-card-body">
+                    <table class="form-table">
+                        <tr>
+                            <th>Endpoint URL</th>
+                            <td>
+                                <?php 
+                                $webhook_url = get_site_url() . '/wp-json/uber-direct/v1/webhook';
+                                ?>
+                                <input type="text" readonly value="<?php echo esc_url($webhook_url); ?>" 
+                                    class="regular-text code" 
+                                    onclick="this.select(); document.execCommand('copy'); alert('Copied!');"
+                                    style="background:#f0f0f1; cursor:pointer;"
+                                    title="Click to copy">
+                                <p class="description" style="color:#007cba;">Copy and paste this URL in Uber Direct Dashboard → Webhooks</p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
             <div id="ub-ajax-response"></div>
 
             <div class="uber-card">

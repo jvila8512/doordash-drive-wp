@@ -176,7 +176,17 @@ public function create_delivery($order_data) {
         $order_data['external_id'] = (string) $order_data['order_id'];
     }
 
-    // 3. Configuración de Sandbox
+    // 3. Restaurant Prep Time - Agregar pickup_ready_dt si hay tiempo de preparación configurado
+    $prep_time = isset($creds['prep_time']) ? intval($creds['prep_time']) : 0;
+    
+    if ($prep_time > 0) {
+        // Uber requiere mínimo 20 minutos en el futuro
+        $prep_time = max($prep_time, 20);
+        $order_data['pickup_ready_dt'] = date('c', strtotime("+{$prep_time} minutes"));
+        error_log("UBER DEBUG: Prep time configured: {$prep_time} minutes. pickup_ready_dt: " . $order_data['pickup_ready_dt']);
+    }
+
+    // 4. Configuración de Sandbox
     if ($creds['api_mode'] === 'sandbox') {
         $order_data['test_specifications'] = [
             'robo_courier_specification' => ['mode' => 'auto']

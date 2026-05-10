@@ -225,8 +225,10 @@ function ub_disparar_entrega_uber($order_id) {
     $settings = $db->get_credentials();
 
     // Limpiamos la dirección para evitar duplicados como vimos en los logs
+    // AGREGADO: address_2 para capturar apartment/suite/unit
     $address_parts = array_filter([
         $order->get_shipping_address_1(),
+        $order->get_shipping_address_2(), // Apartamento/Suite/Unit
         $order->get_shipping_city(),
         $order->get_shipping_state(),
         $order->get_shipping_postcode(),
@@ -520,11 +522,44 @@ add_action( 'rest_api_init', function () {
 
 function ub_handle_uber_webhook( $request ) {
     global $wpdb;
+    
+    // ============================================================
+    // 1. VALIDAR FIRMA DEL WEBHOOK (Seguridad)
+    // ============================================================
+    $db = new Uber_Database();
+    $creds = $db->get_credentials();
+    $webhook_key = $creds['webhook_key'] ?? '';
+    
+    if (!empty($webhook_key)) {
+        $signature = $request->get_header('x-uber-signature');
+        $raw_body = $request->get_body();
+        
+        if (empty($signature)) {
+            error_log("UBER WEBHOOK: Missing signature header!");
+            return new WP_REST_Response(['error' => 'Missing signature'], 401);
+        }
+        
+        // Calcular hash esperado usando HMAC-SHA256
+        $expected_signature = hash_hmac('sha256', $raw_body, $webhook_key);
+        
+        // Comparar firmas de forma segura (tiempo constante)
+        if (!hash_equals($expected_signature, $signature)) {
+            error_log("UBER WEBHOOK: Invalid signature! Expected: " . substr($expected_signature, 0, 10) . "... Got: " . substr($signature, 0, 10));
+            return new WP_REST_Response(['error' => 'Invalid signature'], 401);
+        }
+        
+        error_log("UBER WEBHOOK: Signature validated successfully!");
+    }
+    
+    // ============================================================
+    // 2. PROCESAR DATOS DEL WEBHOOK
+    // ============================================================
     $params = $request->get_json_params();
     
     // Uber sends the order ID in 'external_id'
     $order_id = isset($params['external_id']) ? intval($params['external_id']) : 0;
     $new_status = isset($params['status']) ? sanitize_text_field($params['status']) : '';
+    $tracking_url = isset($params['tracking_url']) ? esc_url_raw($params['tracking_url']) : '';
 
     if ( $order_id > 0 && !empty($new_status) ) {
         $table_name = $wpdb->prefix . 'uber_direct_orders';
@@ -538,8 +573,13 @@ function ub_handle_uber_webhook( $request ) {
 
         // 2. Update WooCommerce Order Meta (for the column)
         update_post_meta( $order_id, '_uber_order_status', $new_status );
+        
+        // 3. Update tracking URL if provided
+        if (!empty($tracking_url)) {
+            update_post_meta( $order_id, '_uber_tracking_url', $tracking_url );
+        }
 
-        // 3. Add Order Note in English
+        // 4. Add Order Note in English
         $order = wc_get_order( $order_id );
         if ( $order ) {
             $order->add_order_note( "Uber Direct Update: Status changed to " . strtoupper($new_status) );
@@ -599,16 +639,32 @@ function ub_fill_column_fixed( $column, $order_or_id ) {
                      See Delivery
                   </a>';
             
-            // Colored Status Logic
+            // Colored Status Logic - UBER STATUSES MAPPING
+            // Estados oficiales de Uber: created, confirmed, picked_up, delivered, canceled, failed
             $status = strtolower($uber_data->order_status);
             $status_color = '#666'; 
+            $status_label = $status;
 
-            if (in_array($status, ['pending', 'created'])) $status_color = '#f1c40f'; // Yellow
-            elseif (in_array($status, ['pickup', 'en_route'])) $status_color = '#3498db'; // Blue
-            elseif (in_array($status, ['delivered', 'completed'])) $status_color = '#27ae60'; // Green
+            // Mapeo completo de estados de Uber
+            if (in_array($status, ['pending', 'created', 'confirmed'])) {
+                $status_color = '#f1c40f'; // Yellow - Esperando/creado/confirmado
+                $status_label = in_array($status, ['confirmed']) ? 'CONFIRMED' : 'PENDING';
+            }
+            elseif (in_array($status, ['picked_up', 'pickup', 'en_route'])) {
+                $status_color = '#3498db'; // Blue - En camino
+                $status_label = 'IN TRANSIT';
+            }
+            elseif (in_array($status, ['delivered', 'completed'])) {
+                $status_color = '#27ae60'; // Green - Entregado
+                $status_label = 'DELIVERED';
+            }
+            elseif (in_array($status, ['canceled', 'failed', 'cancelled'])) {
+                $status_color = '#e74c3c'; // Red - Cancelado/Fallido
+                $status_label = strtoupper($status);
+            }
 
             echo '<div style="font-size:10px; color:' . $status_color . '; margin-top:4px; font-weight:bold; text-transform:uppercase;">' 
-                 . esc_html($status) . '</div>';
+                 . esc_html($status_label) . '</div>';
 
         } else {
             echo '<span style="color:#d63638; font-weight:bold; font-size:11px;">Not Dispatched</span>';

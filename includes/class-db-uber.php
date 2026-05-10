@@ -27,6 +27,8 @@ class Uber_Database {
             'client_secret'  => isset($data['uber_client_secret']) ? sanitize_text_field($data['uber_client_secret']) : $old_settings['client_secret'],
             'api_mode'       => isset($data['uber_api_mode']) ? sanitize_text_field($data['uber_api_mode']) : $old_settings['api_mode'],
             'plugin_commission' => floatval($data['plugin_commission']), // <--- GUARDAR COMO NÚMERO
+            'prep_time'      => isset($data['prep_time']) ? intval($data['prep_time']) : 0, // Minutos de preparación del restaurante
+            'webhook_key'    => isset($data['uber_webhook_key']) ? sanitize_text_field($data['uber_webhook_key']) : $old_settings['webhook_key'], // Webhook Signing Key
         );
 
         update_option($this->option_name, $settings);
@@ -41,7 +43,9 @@ class Uber_Database {
             'api_mode'       => 'sandbox',
             'pickup_address' => '',
             'pickup_phone'   => '',
-            'pickup_name'    => ''
+            'pickup_name'    => '',
+            'prep_time'      => 0, // Minutos de preparación - 0 = ASAP
+            'webhook_key'    => ''  // Webhook Signing Key para validar requests
         ];
         
         $saved = get_option($this->option_name, []);
